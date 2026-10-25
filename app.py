@@ -6,7 +6,7 @@ import sqlite3, html, mimetypes
 import os
 
 BASE = Path(__file__).resolve().parent
-DB = BASE / "lab-equipment.sqlite"
+DB = BASE / "lab_equipment.sqlite"
 
 
 def db():
