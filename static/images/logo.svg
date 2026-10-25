@@ -1,0 +1,16 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="LabBook logo">
+  <defs>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="32" fill="#eff6ff"/>
+  <circle cx="64" cy="64" r="49" fill="url(#blue)"/>
+  <path d="M53 32h22M58 32v26L39 91c-3 6 1 11 8 11h34c7 0 11-5 8-11L70 58V32"
+        fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M48 82h32l9 13H39z" fill="#bae6fd"/>
+  <circle cx="56" cy="77" r="4" fill="#fff"/>
+  <circle cx="69" cy="88" r="3" fill="#fff"/>
+</svg>
