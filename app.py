@@ -104,7 +104,7 @@ def page(message=""):
 <p class="intro">Browse available equipment and create test bookings stored in an SQLite database.</p>
 <a class="primary-link" href="#booking">Book Equipment <span aria-hidden="true">↓</span></a>
 </div>
-<img class="hero-image" src="/static/images/equipment-dashboard.webp"
+<img class="hero-image" src="/static/images/equipment-dashboard.png"
 alt="Laboratory equipment dashboard illustration" width="1280" height="720">
 </section>
 
