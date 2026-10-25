@@ -2,6 +2,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs
 from pathlib import Path
 import sqlite3, html, mimetypes
+import os
 BASE = Path(__file__).resolve().parent
 DB = BASE / "lab_equipment.sqlite"
 
@@ -54,7 +55,7 @@ class Handler(BaseHTTPRequestHandler):
         data=body.encode('utf-8'); self.send_response(code); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data)
     def log_message(self, fmt, *args): print('%s - %s' % (self.address_string(), fmt%args))
 
-if __name__=='__main__':
-    print('LabBook running at http://127.0.0.1:8000')
-    print('Press Ctrl+C to stop.')
-    HTTPServer(('127.0.0.1',8000),Handler).serve_forever()
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', '8000'))
+    print(f'LabBook running on port {port}')
+    HTTPServer(('0.0.0.0', port), Handler).serve_forever()
