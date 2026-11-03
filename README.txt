@@ -1,5 +1,5 @@
 LABBOOK — LABORATORY EQUIPMENT BOOKING SERVICE (ICT Project Stage 2)
-Team: Dulat Nurlybek, Dulat Barkhiya · SE-2625
+Author: Dulat Nurlybek · SE-2625 (individual project)
 Live: https://lab-equipment-booking-vzta.onrender.com/   (Render free tier: first open after idle takes ~50 s)
 Code: https://github.com/Dulat222/lab-equipment-booking
 
