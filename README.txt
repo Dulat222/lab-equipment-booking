@@ -21,7 +21,7 @@ MAIN SCENARIOS
   Admin:   Log in -> dashboard (KPIs, 3 charts, IoT sensors) -> "Mark returned" / "Send to maintenance".
 
 SECURITY (from Assignment 3)
-  - Passwords stored as PBKDF2-HMAC-SHA256 hashes (200 000 iterations, random salt) — security.py
+  - Passwords stored as PBKDF2-HMAC-SHA256 hashes (600 000 iterations as recommended by OWASP, random 16-byte salt) — security.py
   - Role-based access: students get HTTP 403 on /admin (logged as DENIED in AuditLog)
   - Session cookie: random 256-bit token, HttpOnly, SameSite=Lax, Secure on HTTPS, expires after 8 h
   - Brute-force protection: 5 wrong passwords -> account email locked for 5 min (HTTP 429)
@@ -44,6 +44,7 @@ FILES
   scripts/iot_simulator.py fake smart-tag readings
   static/                 CSS, JS, logo, images
 
-NOTE: Render's free tier has an ephemeral disk — after a redeploy or restart the database returns
-to the generated state in the repository. New accounts and bookings created during a demo persist
-only while the instance is running.
+NOTE: Render's free tier has an ephemeral filesystem and spins the service down after 15 minutes
+without traffic. On every spin-down, restart or redeploy the SQLite file returns to the generated
+state stored in the repository (150 bookings). Accounts and bookings created during a demo persist
+only while the instance stays awake. Planned fix: move to a managed PostgreSQL database (week 10 plan).

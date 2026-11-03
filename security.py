@@ -1,11 +1,11 @@
 """Security helpers (standard library only).
 
-Passwords: PBKDF2-HMAC-SHA256, 200 000 iterations, 16-byte random salt per user.
+Passwords: PBKDF2-HMAC-SHA256, 600 000 iterations, 16-byte random salt per user.
 Stored format: pbkdf2_sha256$<iterations>$<salt_hex>$<hash_hex>
 """
 import hashlib, hmac, secrets, time
 
-ITERATIONS = 200_000
+ITERATIONS = 600_000  # OWASP Password Storage Cheat Sheet recommendation for PBKDF2-HMAC-SHA256
 
 
 def hash_password(password: str) -> str:
