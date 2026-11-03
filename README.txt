@@ -1,24 +1,49 @@
-ASSIGNMENT 4 — LABORATORY EQUIPMENT BOOKING SERVICE
+LABBOOK — LABORATORY EQUIPMENT BOOKING SERVICE (ICT Project Stage 2)
+Team: Dulat Nurlybek, Dulat Barkhiya · SE-2625
+Live: https://lab-equipment-booking-vzta.onrender.com/   (Render free tier: first open after idle takes ~50 s)
+Code: https://github.com/Dulat222/lab-equipment-booking
 
-QUICK START (Windows + VS Code)
-1. Extract the ZIP file into a normal folder.
-2. Open that folder in VS Code: File > Open Folder.
-3. Open Terminal > New Terminal.
-4. Run: py app.py
-5. In your browser open: http://127.0.0.1:8000
-6. Test READ by viewing the equipment catalogue.
-7. Test WRITE by selecting a student, available equipment and dates, then submitting the form.
-8. Check the Booking and AuditLog tables in lab_equipment.sqlite (DB Browser for SQLite is optional).
-9. Stop the server with Ctrl+C.
+RUN LOCALLY (Windows / macOS / Linux)
+1. Install Python 3.10+ (no extra packages needed — standard library only).
+2. Open the project folder in a terminal (VS Code: Terminal > New Terminal).
+3. Run:  py app.py        (macOS/Linux: python3 app.py)
+4. Open http://127.0.0.1:8000
+5. Stop with Ctrl+C.
+To reset the database to the original generated data:  py scripts/seed_db.py
 
-REQUIREMENTS
-- Python 3.10+; app uses only the Python standard library.
-- Keep app.py, lab_equipment.sqlite and static/ together.
-- Demo-only test data; no login/authentication and not intended for production.
-- The browser needs internet only if Google Fonts loads; local CSS and media still work without it.
+DEMO ACCOUNTS (generated data — not real people)
+  Admin:    admin@labbook.test      / Admin#2026
+  Student:  aruzhan.s@labbook.test  / Student#2026   (all 36 demo students use Student#2026)
+  Or register a new student account on /register.
 
-MEDIA EXPERIMENT
-static/images/equipment-dashboard.png, equipment-dashboard.jpg (quality 80), equipment-dashboard-q40.jpg (quality 40), equipment-dashboard.webp are generated from the same project illustration. Actual sizes are listed in docs/Assignment4_Report.docx and .pdf. Use the provided side-by-side page to capture your own screenshot at 100% zoom.
+MAIN SCENARIOS
+  Student: Register/Log in -> choose equipment and dates -> Book -> "My bookings" -> cancel an upcoming booking.
+  Admin:   Log in -> dashboard (KPIs, 3 charts, IoT sensors) -> "Mark returned" / "Send to maintenance".
 
-IMPORTANT BEFORE SUBMISSION
-The report includes clearly marked fields for real browser Network measurements and team contribution. Fill them with your own observed values. Record your own 2–3 minute demo video; do not claim a video or measurements that you did not produce. Review all requirements in docs/Assignment4_Report.pdf.
+SECURITY (from Assignment 3)
+  - Passwords stored as PBKDF2-HMAC-SHA256 hashes (200 000 iterations, random salt) — security.py
+  - Role-based access: students get HTTP 403 on /admin (logged as DENIED in AuditLog)
+  - Session cookie: random 256-bit token, HttpOnly, SameSite=Lax, Secure on HTTPS, expires after 8 h
+  - Brute-force protection: 5 wrong passwords -> account email locked for 5 min (HTTP 429)
+  - HTTPS on Render + HSTS header; CSP, X-Frame-Options, nosniff headers
+  - All SQL uses parameters (no string concatenation) -> no SQL injection; all output HTML-escaped
+
+IOT SIMULATION (Part D3)
+  Open the admin dashboard, then in a second terminal run:
+     py scripts/iot_simulator.py
+  For the deployed site:
+     py scripts/iot_simulator.py --url https://lab-equipment-booking-vzta.onrender.com --key demo-device-key
+  The "Equipment sensors" table refreshes every 5 s; on round 3 the Thermal Camera leaves its
+  cabinet without a booking and a red alert appears. (Device key can be changed with env SENSOR_API_KEY.)
+
+FILES
+  app.py                  web server, pages, routes, analysis SQL (Q1–Q3)
+  security.py             password hashing, tokens, login rate limit
+  lab_equipment.sqlite    database (User, Equipment, Booking, AuditLog, Session, SensorReading)
+  scripts/seed_db.py      rebuilds the DB with 150 GENERATED bookings (random seed 2625)
+  scripts/iot_simulator.py fake smart-tag readings
+  static/                 CSS, JS, logo, images
+
+NOTE: Render's free tier has an ephemeral disk — after a redeploy or restart the database returns
+to the generated state in the repository. New accounts and bookings created during a demo persist
+only while the instance is running.
