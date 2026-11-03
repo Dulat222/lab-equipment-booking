@@ -645,3 +645,4 @@ tr.flash td { background: #fef9c3; transition: background .6s; }
   .top { flex-direction: column; align-items: flex-start; }
   .dates { grid-template-columns: 1fr; }
 }
+.days-hint { margin: -6px 0 18px; padding: 10px 12px; border-radius: 10px; background: #eff6ff; color: #1e3a8a; font-size: 13px; }

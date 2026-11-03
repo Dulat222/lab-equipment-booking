@@ -125,7 +125,8 @@ def catalog_page(user, message="", error=False, form=None):
 You can keep equipment for up to {MAX_DAYS} days.</p><div class="privacy">ⓘ Booking as <b>{esc(user["full_name"])}</b></div></div>
 <form action="/book" method="post"><label for="equipment">Equipment</label><select id="equipment" name="equipment_id" required>{opts}</select>
 <div class="dates"><div><label for="booking_date">Pick-up date</label><input id="booking_date" name="booking_date" type="date" min="{today()}" value="{esc(form.get("booking_date", ""))}" required></div>
-<div><label for="return_date">Return date</label><input id="return_date" name="return_date" type="date" min="{today()}" value="{esc(form.get("return_date", ""))}" required></div></div>
+<div><label for="return_date">Return date</label><input id="return_date" name="return_date" type="date" min="{today()}" value="{esc(form.get("return_date", ""))}" required aria-describedby="days-hint"></div></div>
+<p class="days-hint" id="days-hint">ⓘ You can keep equipment for <b>at most {MAX_DAYS} days</b>. After you choose the pick-up date, the calendar only offers return dates within this limit.</p>
 <button type="submit">Book equipment <span aria-hidden="true">↗</span></button></form></section>'''
     elif user:
         booking = ""

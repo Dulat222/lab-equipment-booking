@@ -55,3 +55,20 @@
     }
   });
 })();
+
+// Usability fix after user testing (B2): limit the return-date picker to 14 days after pick-up.
+(() => {
+  const start = document.getElementById('booking_date');
+  const end = document.getElementById('return_date');
+  if (!start || !end) return;
+  const MAX_DAYS = 14;
+  const iso = (d) => d.toISOString().slice(0, 10);
+  start.addEventListener('change', () => {
+    if (!start.value) return;
+    const s = new Date(start.value + 'T00:00:00Z');
+    const max = new Date(s.getTime() + (MAX_DAYS - 1) * 86400000);
+    end.min = start.value;
+    end.max = iso(max);
+    if (end.value && (end.value < end.min || end.value > end.max)) end.value = '';
+  });
+})();
