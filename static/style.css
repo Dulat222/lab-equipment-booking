@@ -3,13 +3,15 @@
 
 /* LabBook — AITU-style theme: white space, black type, AITU blue actions, navy + sky accents */
 :root {
-  --blue: #1385e5;
-  --blue-dark: #0f6cbd;
+  --blue: #0f6cbd;        /* AITU blue, darkened for WCAG AA contrast with white text (5.4:1) */
+  --blue-dark: #0b5394;
+  --blue-bright: #1385e5; /* AITU blue as on astanait.edu.kz — decorative use only (charts, borders) */
+  --teal-text: #17759b;   /* readable version of the AITU sky blue for small text on light backgrounds */
   --navy: #1a3a5c;
   --sky: #31a2cf;
   --ink: #0a0a0a;
   --text: #404040;
-  --muted: #737373;
+  --muted: #666666;
   --line: #e5e5e5;
   --line-strong: #d4d4d4;
   --soft: #f5f5f5;
@@ -161,7 +163,7 @@ h2 {
 
 .eyebrow {
   margin: 0 0 12px;
-  color: var(--sky);
+  color: var(--teal-text);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 2px;
@@ -641,7 +643,7 @@ button.link.danger {
 }
 
 .kpi {
-  border-top: 3px solid var(--blue);
+  border-top: 3px solid var(--blue-bright);
 }
 
 .kpi span {

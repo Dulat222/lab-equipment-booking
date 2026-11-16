@@ -27,6 +27,10 @@ SECURITY (from Assignment 3)
   - Brute-force protection: 5 wrong passwords -> account email locked for 5 min (HTTP 429)
   - HTTPS on Render + HSTS header; CSP, X-Frame-Options, nosniff headers
   - All SQL uses parameters (no string concatenation) -> no SQL injection; all output HTML-escaped
+  - CSRF tokens on every form: logged-in users get a token bound to their session (HMAC-SHA256),
+    visitors (login/register) a random token in an HttpOnly cookie; a missing or wrong token -> HTTP 403,
+    logged as CSRF_FAIL in AuditLog. Set env CSRF_SECRET to keep tokens valid across restarts.
+  - Colours meet WCAG AA contrast (buttons 5.4:1); PageSpeed/Lighthouse accessibility checked after the change
 
 IOT SIMULATION (Part D3)
   Open the admin dashboard, then in a second terminal run:

@@ -46,3 +46,19 @@ class LoginLimiter:
 
     def reset(self, key):
         self.fails.pop(key, None)
+
+
+# ---- CSRF protection --------------------------------------------------------------
+# Logged-in users: token = HMAC(server secret, session token), so it is bound to the session and
+# cannot be guessed or reused by another site. Visitors (login/register forms): random value kept
+# in an HttpOnly cookie and repeated in a hidden form field (double-submit).
+import os as _os
+CSRF_SECRET = (_os.environ.get("CSRF_SECRET") or secrets.token_hex(32)).encode()
+
+
+def csrf_for_session(session_token: str) -> str:
+    return hmac.new(CSRF_SECRET, session_token.encode(), hashlib.sha256).hexdigest()
+
+
+def csrf_equal(a: str, b: str) -> bool:
+    return bool(a) and bool(b) and hmac.compare_digest(a, b)

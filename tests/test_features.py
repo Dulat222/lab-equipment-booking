@@ -17,7 +17,18 @@ def session():
     return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(CookieJar()), NoRedirect)
 
 
-def req(op, path, data=None):
+TOKEN_RE = __import__("re").compile(r'name="csrf" value="([^"]+)"')
+
+
+def csrf(op):
+    """Read the CSRF token the server puts into every POST form (needs the session's cookies)."""
+    body = op.open(BASE + "/login" if not getattr(op, "logged", False) else BASE + "/", timeout=20).read().decode()
+    return TOKEN_RE.search(body).group(1)
+
+
+def req(op, path, data=None, token=True):
+    if data is not None and token:
+        data = dict(data, csrf=csrf(op))
     body = urllib.parse.urlencode(data).encode() if data is not None else None
     try:
         r = op.open(BASE + path, body, timeout=20)
@@ -41,8 +52,8 @@ check("R1 astanait.edu.kz registration accepted", s == 303, s)
 s, b, _ = req(anon, "/register")
 check("R1 hint shown on register page", "@astanait.edu.kz" in b)
 
-stu = session(); req(stu, "/login", {"email": "aruzhan.s@labbook.test", "password": "Student#2026"})
-adm = session(); req(adm, "/login", {"email": "admin@labbook.test", "password": "Admin#2026"})
+stu = session(); req(stu, "/login", {"email": "aruzhan.s@labbook.test", "password": "Student#2026"}); stu.logged = True
+adm = session(); req(adm, "/login", {"email": "admin@labbook.test", "password": "Admin#2026"}); adm.logged = True
 
 # ---- catalog filters markup ----
 s, b, _ = req(stu, "/")
@@ -118,5 +129,20 @@ s, b, _ = req(stu, "/book", {"equipment_id": 5, "booking_date": D(40), "return_d
 check("Regression: 14-day limit still enforced", s == 400 and "at most 14 days" in b)
 s, b, _ = req(stu, "/admin")
 check("Regression: student /admin still 403", s == 403)
+
+# ---- CSRF ----
+s, b, _ = req(stu, "/book", {"equipment_id": 13, "booking_date": D(50), "return_date": D(51)}, token=False)
+check("CSRF: booking without token rejected (403)", s == 403 and "expired" in b, s)
+s, b, _ = req(stu, "/book", {"equipment_id": 13, "booking_date": D(50), "return_date": D(51), "csrf": "forged-token-from-evil-site"}, token=False)
+check("CSRF: booking with forged token rejected (403)", s == 403, s)
+s, b, _ = req(adm, "/admin/maintenance", {"equipment_id": 13}, token=False)
+check("CSRF: admin action without token rejected (403)", s == 403, s)
+other = session(); s, b, _ = req(other, "/login", {"email": "admin@labbook.test", "password": "Admin#2026"}, token=False)
+check("CSRF: login without token rejected (403)", s == 403, s)
+tok_stu = csrf(stu)
+s, b, _ = req(adm, "/admin/maintenance", {"equipment_id": 13, "csrf": tok_stu}, token=False)
+check("CSRF: another user's token rejected (403)", s == 403, s)
+s, b, _ = req(stu, "/book", {"equipment_id": 13, "booking_date": D(50), "return_date": D(51)})
+check("CSRF: booking with valid token works", s == 200 and "confirmed" in b, s)
 
 print("\nALL PASSED" if ok_all else "\nSOME CHECKS FAILED")

@@ -28,6 +28,13 @@ def opener():
     return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar), NoRedirect)
 
 
+TOKEN_RE = __import__("re").compile(r'name="csrf" value="([^"]+)"')
+
+
+def token(op, path):
+    return TOKEN_RE.search(op.open(BASE + path, timeout=30).read().decode()).group(1)
+
+
 def post(op, path, data):
     body = urllib.parse.urlencode(data).encode()
     try:
@@ -44,7 +51,8 @@ emails = [r[0] for r in sqlite3.connect(DB).execute(
 sessions = []
 for em in emails:
     op = opener()
-    post(op, "/login", {"email": em, "password": "Student#2026"})
+    post(op, "/login", {"email": em, "password": "Student#2026", "csrf": token(op, "/login")})
+    op.csrf = token(op, "/")  # session-bound CSRF token used for /book
     sessions.append(op)
 
 start = (dt.date.today() + dt.timedelta(days=20)).isoformat()
@@ -66,7 +74,7 @@ gate = threading.Barrier(N)
 
 def worker(i):
     gate.wait()  # all 20 requests leave at the same moment
-    results[i] = post(sessions[i], "/book", {"equipment_id": EID, "booking_date": start, "return_date": end})
+    results[i] = post(sessions[i], "/book", {"equipment_id": EID, "booking_date": start, "return_date": end, "csrf": sessions[i].csrf})
 
 
 threads = [threading.Thread(target=worker, args=(i,)) for i in range(N)]

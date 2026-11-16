@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 from pathlib import Path
 import csv, datetime as dt, html, io, json, mimetypes, os, re, sqlite3
 
-from security import hash_password, verify_password, new_token, LoginLimiter
+from security import hash_password, verify_password, new_token, LoginLimiter, csrf_for_session, csrf_equal
 
 BASE = Path(__file__).resolve().parent
 DB = BASE / "lab_equipment.sqlite"
@@ -482,7 +482,39 @@ class Handler(BaseHTTPRequestHandler):
             return {}
         return {k: v[0].strip() for k, v in parse_qs(self.rfile.read(n).decode("utf-8", "replace")).items()}
 
+    # ---- CSRF ----
+    def session_token(self):
+        """sid cookie value if it belongs to a valid, unexpired session."""
+        ck = SimpleCookie(self.headers.get("Cookie", ""))
+        if "sid" not in ck:
+            return None
+        with db() as c:
+            ok = c.execute("SELECT 1 FROM Session WHERE token=? AND expires_at > datetime('now')", (ck["sid"].value,)).fetchone()
+        return ck["sid"].value if ok else None
+
+    def expected_csrf(self):
+        sid = self.session_token()
+        if sid:
+            return csrf_for_session(sid), None
+        ck = SimpleCookie(self.headers.get("Cookie", ""))
+        if "csrf" in ck and re.fullmatch(r"[A-Za-z0-9_-]{20,100}", ck["csrf"].value):
+            return ck["csrf"].value, None
+        tok = getattr(self, "_anon_csrf", None) or new_token()
+        self._anon_csrf = tok
+        secure = "; Secure" if self.https() else ""
+        return tok, ("Set-Cookie", f"csrf={tok}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400{secure}")
+
+    def csrf_ok(self, f):
+        expected, _ = self.expected_csrf()
+        return csrf_equal(f.get("csrf", ""), expected)
+
     def send(self, body, code=200, ctype="text/html; charset=utf-8", headers=()):
+        if isinstance(body, str) and ctype.startswith("text/html") and 'method="post"' in body:
+            # add the CSRF token as a hidden field to every POST form on the page
+            tok, cookie = self.expected_csrf()
+            body = re.sub(r'(<form\b[^>]*method="post"[^>]*>)', lambda m: m.group(1) + f'<input type="hidden" name="csrf" value="{tok}">', body)
+            if cookie:
+                headers = list(headers) + [cookie]
         data = body.encode("utf-8") if isinstance(body, str) else body
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -585,6 +617,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.sensor()
         user = self.current_user()
         f = self.form()
+        if not self.csrf_ok(f):
+            with db() as c:
+                audit(c, "CSRF_FAIL", "Form", None, user["user_id"] if user else None)
+            return self.send(error_page(user, 403, "This form has expired or did not come from LabBook. Reload the page and try again."), 403)
         if path == "/register":
             return self.register(user, f)
         if path == "/login":
