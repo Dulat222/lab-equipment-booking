@@ -492,6 +492,9 @@ class Handler(BaseHTTPRequestHandler):
         elif (de - ds).days + 1 > MAX_DAYS:
             problem = f"You can book equipment for at most {MAX_DAYS} days."
         with db() as c:
+            # R4: take the write lock BEFORE the conflict check, so two simultaneous requests
+            # cannot both pass the check and both insert (check-then-insert race).
+            c.execute("BEGIN IMMEDIATE")
             eq = c.execute("SELECT * FROM Equipment WHERE equipment_id=?", (eid,)).fetchone()
             if not problem and (not eq or eq["status"] == "Maintenance"):
                 problem = "This equipment is under maintenance. Please choose another item."
@@ -577,4 +580,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
     host = "0.0.0.0" if "PORT" in os.environ else "127.0.0.1"
     print(f"LabBook running at http://{host}:{port}")
-    ThreadingHTTPServer((host, port), Handler).serve_forever()
+    class Server(ThreadingHTTPServer):
+        request_queue_size = 64  # default 5 drops connections when many users click at once
+        daemon_threads = True
+    Server((host, port), Handler).serve_forever()

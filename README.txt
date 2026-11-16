@@ -36,6 +36,11 @@ IOT SIMULATION (Part D3)
   The "Equipment sensors" table refreshes every 5 s; on round 3 the Thermal Camera leaves its
   cabinet without a booking and a red alert appears. (Device key can be changed with env SENSOR_API_KEY.)
 
+R4 TEST (Stage 1 top requirement: no double booking)
+  Start the server (py app.py), then in a second terminal:
+     py tests/r4_concurrency_test.py http://127.0.0.1:8000 5              (20 requests for a free item -> 1 confirmed, 19 rejected)
+  Item ids without open loans in the generated data: 5, 7, 11, 13, 14 (reset with py scripts/seed_db.py).
+
 FILES
   app.py                  web server, pages, routes, analysis SQL (Q1–Q3)
   security.py             password hashing, tokens, login rate limit
