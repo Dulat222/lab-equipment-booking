@@ -58,6 +58,16 @@ CREATE TABLE SensorReading(
   recorded_at TEXT NOT NULL);
 CREATE INDEX idx_booking_equipment_dates ON Booking(equipment_id, booking_date, return_date);
 CREATE INDEX idx_sensor_equipment_time ON SensorReading(equipment_id, recorded_at);
+CREATE TABLE Block(
+  block_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  equipment_id INTEGER NOT NULL REFERENCES Equipment(equipment_id),
+  start_date TEXT NOT NULL,
+  end_date TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  created_by INTEGER REFERENCES User(user_id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK(end_date >= start_date));
+CREATE INDEX idx_block_equipment_dates ON Block(equipment_id, start_date, end_date);
 """
 
 EQUIPMENT = [  # name, category, description, (min_days, max_days), weight, late_prob

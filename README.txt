@@ -41,6 +41,20 @@ R4 TEST (Stage 1 top requirement: no double booking)
      py tests/r4_concurrency_test.py http://127.0.0.1:8000 5              (20 requests for a free item -> 1 confirmed, 19 rejected)
   Item ids without open loans in the generated data: 5, 7, 11, 13, 14 (reset with py scripts/seed_db.py).
 
+NEW FEATURES (after Stage 2 defence prep, 16 Nov 2026)
+  R1  Registration accepts only university e-mail (@astanait.edu.kz). Change with env UNI_EMAIL_DOMAINS.
+      Demo accounts (@labbook.test) can still log in.
+  R3  Booking form shows an availability calendar for the chosen item (free / booked / reserved / not returned).
+      Click a free day for pick-up, then another for return. Data: GET /api/availability?equipment_id=N (login required).
+  R6  Admin can add new equipment and edit existing items (Admin dashboard -> Inventory -> "+ Add new equipment" / "Edit").
+  R7  On-site reminders: students see "return today/tomorrow", "overdue" and "pick up tomorrow" on Catalog and My bookings;
+      the admin sees "Return reminders" on the dashboard.
+  R8  Admin can block dates for an item (lab session, calibration). Students cannot book those dates. Table: Block.
+  R10 Admin can download CSV files (Excel-ready): all bookings and statistics by category.
+  +   Catalog search (word start) and filters by category and status.
+  The Block table is created automatically on start-up if the database is older.
+  Feature tests: start the server, then  py tests/test_features.py http://127.0.0.1:8000
+
 FILES
   app.py                  web server, pages, routes, analysis SQL (Q1–Q3)
   security.py             password hashing, tokens, login rate limit

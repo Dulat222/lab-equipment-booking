@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie
 from urllib.parse import parse_qs, urlsplit
 from pathlib import Path
-import datetime as dt, html, json, mimetypes, os, re, sqlite3
+import csv, datetime as dt, html, io, json, mimetypes, os, re, sqlite3
 
 from security import hash_password, verify_password, new_token, LoginLimiter
 
@@ -16,6 +16,22 @@ DB = BASE / "lab_equipment.sqlite"
 SEMESTER_START = "2026-09-01"
 MAX_DAYS = 14
 SENSOR_KEY = os.environ.get("SENSOR_API_KEY", "demo-device-key")
+# R1: only university addresses may register (comma-separated list, can be changed without code edits)
+UNI_DOMAINS = tuple(d.strip().lower() for d in os.environ.get("UNI_EMAIL_DOMAINS", "astanait.edu.kz").split(",") if d.strip())
+
+# R8: dates an administrator closes for an item (lab session, calibration...). Created at start-up if missing.
+BLOCK_SCHEMA = """
+CREATE TABLE IF NOT EXISTS Block(
+  block_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  equipment_id INTEGER NOT NULL REFERENCES Equipment(equipment_id),
+  start_date TEXT NOT NULL,
+  end_date TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  created_by INTEGER REFERENCES User(user_id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK(end_date >= start_date));
+CREATE INDEX IF NOT EXISTS idx_block_equipment_dates ON Block(equipment_id, start_date, end_date);
+"""
 limiter = LoginLimiter()
 esc = html.escape
 
@@ -65,12 +81,21 @@ def equipment_state(c):
         (SELECT MIN(b.return_date) FROM Booking b WHERE b.equipment_id=e.equipment_id
            AND b.status='Confirmed' AND b.booking_date<=? ) AS busy_until,
         (SELECT power_w FROM SensorReading s WHERE s.equipment_id=e.equipment_id
-           ORDER BY recorded_at DESC LIMIT 1) AS power_w
-      FROM Equipment e ORDER BY e.equipment_id""", (t,)).fetchall()
+           ORDER BY recorded_at DESC LIMIT 1) AS power_w,
+        (SELECT k.end_date FROM Block k WHERE k.equipment_id=e.equipment_id
+           AND k.start_date<=? AND k.end_date>=? ORDER BY k.end_date DESC LIMIT 1) AS reserved_until
+      FROM Equipment e ORDER BY e.equipment_id""", (t, t, t)).fetchall()
     out = []
     for r in rows:
         d = dict(r)
-        d["state"] = "Maintenance" if r["status"] == "Maintenance" else ("Booked" if r["busy_until"] else "Available")
+        if r["status"] == "Maintenance":
+            d["state"] = "Maintenance"
+        elif r["busy_until"]:
+            d["state"] = "Booked"
+        elif r["reserved_until"]:
+            d["state"] = "Reserved"
+        else:
+            d["state"] = "Available"
         out.append(d)
     return out
 
@@ -105,18 +130,62 @@ def layout(title, body, user=None, message="", error=False):
 
 
 def status_badge(state):
-    cls = {"Available": "available", "Booked": "booked", "Maintenance": "maintenance"}.get(state, "booked")
+    cls = {"Available": "available", "Booked": "booked", "Maintenance": "maintenance", "Reserved": "reserved"}.get(state, "booked")
     return f'<span class="status {cls}">{esc(state)}</span>'
+
+
+def student_reminders(c, user_id):
+    """R7: on-site reminders about the student's own loans (no e-mail service needed)."""
+    t = dt.date.today()
+    tm = t + dt.timedelta(days=1)
+    rows = c.execute("""SELECT b.booking_date, b.return_date, e.name, e.location FROM Booking b JOIN Equipment e USING(equipment_id)
+                        WHERE b.user_id=? AND b.status='Confirmed' AND b.booking_date<=? ORDER BY b.return_date""",
+                     (user_id, tm.isoformat())).fetchall()
+    out = []
+    for r in rows:
+        ret, pick = dt.date.fromisoformat(r["return_date"]), dt.date.fromisoformat(r["booking_date"])
+        name = esc(r["name"])
+        if ret < t:
+            n = (t - ret).days
+            out.append(("overdue", f"<b>{name}</b> is overdue: it was due on {ret} ({n} day{'s' if n != 1 else ''} ago). Please return it to the lab."))
+        elif pick > t:
+            out.append(("info", f"Pick up <b>{name}</b> tomorrow ({pick}) at {esc(r['location'] or 'the lab')}."))
+        elif pick == t and ret >= t and r["booking_date"] == t.isoformat():
+            out.append(("info", f"Your booking of <b>{name}</b> starts today. Pick it up at {esc(r['location'] or 'the lab')}."))
+        if ret == t:
+            out.append(("due", f"Return <b>{name}</b> today."))
+        elif ret == tm:
+            out.append(("due", f"Return <b>{name}</b> tomorrow ({ret})."))
+    return out
+
+
+def reminders_html(items, title="Reminders"):
+    if not items:
+        return ""
+    lis = "".join(f'<li class="rem {lvl}">{txt}</li>' for lvl, txt in items)
+    return f'<section class="reminders" aria-label="{esc(title)}"><p class="eyebrow">{esc(title.upper())}</p><ul>{lis}</ul></section>'
 
 
 def catalog_page(user, message="", error=False, form=None):
     form = form or {}
     with db() as c:
         eq = equipment_state(c)
-    cards = "".join(f'''<article class="item"><div class="item-top"><span class="icon" aria-hidden="true">◈</span>{status_badge(x["state"])}</div>
+        rem = reminders_html(student_reminders(c, user["user_id"])) if user and user["role"] == "student" else ""
+    is_student = bool(user and user["role"] == "student")
+    cards = "".join(f'''<article class="item" data-name="{esc(x["name"].lower())} {esc((x["description"] or "").lower())}" data-category="{esc(x["category"])}" data-state="{x["state"]}">
+<div class="item-top"><span class="icon" aria-hidden="true">◈</span>{status_badge(x["state"])}</div>
 <h3>{esc(x["name"])}</h3><p>{esc(x["category"])}</p><small>{esc(x["description"] or "")}</small>
-<div class="item-foot">ID {x["equipment_id"]} · {esc(x["location"] or "")}{f' · busy until {esc(x["busy_until"])}' if x["state"] == "Booked" else ""}</div></article>'''
+<div class="item-foot">ID {x["equipment_id"]} · {esc(x["location"] or "")}{f' · busy until {esc(x["busy_until"])}' if x["state"] == "Booked" else ""}{f' · reserved by the lab until {esc(x["reserved_until"])}' if x["state"] == "Reserved" else ""}</div>
+{f'<button type="button" class="link book-this" data-id="{x["equipment_id"]}">Check dates &amp; book</button>' if is_student and x["state"] != "Maintenance" else ""}</article>'''
                     for x in eq)
+    cats = sorted({x["category"] for x in eq})
+    filters = ('<div class="filters" role="search"><input id="f-q" type="search" placeholder="Search by name or description" aria-label="Search equipment">'
+               '<select id="f-cat" aria-label="Filter by category"><option value="">All categories</option>'
+               + "".join(f'<option>{esc(cx)}</option>' for cx in cats) +
+               '</select><select id="f-state" aria-label="Filter by status"><option value="">Any status</option>'
+               '<option>Available</option><option>Booked</option><option>Reserved</option><option>Maintenance</option></select>'
+               '<span class="count" id="f-count" aria-live="polite"></span></div>'
+               '<p class="empty" id="f-empty" hidden>No equipment matches your search. Clear the filters to see all items.</p>')
     if user and user["role"] == "student":
         opts = "".join(f'<option value="{x["equipment_id"]}" {"selected" if str(x["equipment_id"]) == form.get("equipment_id") else ""} '
                        f'{"disabled" if x["state"] == "Maintenance" else ""}>{esc(x["name"])} — {esc(x["state"])}</option>' for x in eq)
@@ -124,6 +193,7 @@ def catalog_page(user, message="", error=False, form=None):
 <h2>Plan your lab work</h2><p>Choose equipment and dates. The system checks that nobody else has booked the item for the same days.
 You can keep equipment for up to {MAX_DAYS} days.</p><div class="privacy">ⓘ Booking as <b>{esc(user["full_name"])}</b></div></div>
 <form action="/book" method="post"><label for="equipment">Equipment</label><select id="equipment" name="equipment_id" required>{opts}</select>
+<div id="avail" class="avail" aria-live="polite"></div>
 <div class="dates"><div><label for="booking_date">Pick-up date</label><input id="booking_date" name="booking_date" type="date" min="{today()}" value="{esc(form.get("booking_date", ""))}" required></div>
 <div><label for="return_date">Return date</label><input id="return_date" name="return_date" type="date" min="{today()}" value="{esc(form.get("return_date", ""))}" required aria-describedby="days-hint"></div></div>
 <p class="days-hint" id="days-hint">ⓘ You can keep equipment for <b>at most {MAX_DAYS} days</b>. After you choose the pick-up date, the calendar only offers return dates within this limit.</p>
@@ -138,9 +208,9 @@ You can keep equipment for up to {MAX_DAYS} days.</p><div class="privacy">ⓘ Bo
 <p class="intro">See what is free right now and book it in under a minute — no more paper sign-up sheets.</p>
 <a class="primary-link" href="#booking">Book equipment <span aria-hidden="true">↓</span></a></div>
 <img class="hero-image" src="/static/images/equipment-dashboard.webp" alt="Illustration of equipment cards and statuses" width="1280" height="720"></section>
-{booking}
-<section class="section" id="equipment"><div class="section-heading"><div><p class="eyebrow">CATALOG</p><h2>Equipment</h2></div>
-<span class="count">{len(eq)} items · {sum(x["state"] == "Available" for x in eq)} available now</span></div><div class="grid">{cards}</div></section>'''
+{rem}{booking}
+<section class="section" id="catalog"><div class="section-heading"><div><p class="eyebrow">CATALOG</p><h2>Equipment</h2></div>
+<span class="count">{len(eq)} items · {sum(x["state"] == "Available" for x in eq)} available now</span></div>{filters}<div class="grid" id="catalog-grid">{cards}</div></section>'''
     return layout("Catalog", body, user, message, error)
 
 
@@ -153,7 +223,8 @@ def auth_page(kind, user=None, message="", error=False, email=""):
     else:
         body = f'''<section class="auth"><h1>Create a student account</h1><form method="post" action="/register">
 <label for="full_name">Full name</label><input id="full_name" name="full_name" autocomplete="name" required maxlength="80">
-<label for="email">University email</label><input id="email" name="email" type="email" autocomplete="email" value="{esc(email)}" required>
+<label for="email">University email</label><input id="email" name="email" type="email" autocomplete="email" value="{esc(email)}" placeholder="name@{UNI_DOMAINS[0]}" required aria-describedby="email-hint">
+<p class="form-hint field-hint" id="email-hint">Only university addresses (@{", @".join(UNI_DOMAINS)}) can register.</p>
 <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="new-password" minlength="8" required aria-describedby="pw-hint">
 <p class="form-hint" id="pw-hint">At least 8 characters, including a letter and a digit.</p>
 <button type="submit">Create account</button><p class="form-hint">Already registered? <a href="/login">Log in</a></p></form></section>'''
@@ -164,6 +235,7 @@ def my_page(user, message="", error=False):
     with db() as c:
         rows = c.execute("""SELECT b.*, e.name FROM Booking b JOIN Equipment e USING(equipment_id)
                             WHERE b.user_id=? ORDER BY b.booking_date DESC""", (user["user_id"],)).fetchall()
+        rem = reminders_html(student_reminders(c, user["user_id"]))
     t = today()
     trs = []
     for b in rows:
@@ -174,7 +246,7 @@ def my_page(user, message="", error=False):
                   f'<button class="link danger">Cancel</button></form>') if b["status"] == "Confirmed" and b["booking_date"] > t else ""
         trs.append(f'<tr><td>#{b["booking_id"]}</td><td>{esc(b["name"])}</td><td>{b["booking_date"]}</td><td>{b["return_date"]}</td>'
                    f'<td><span class="pill {st.lower()}">{st}</span></td><td>{action}</td></tr>')
-    body = f'''<section class="section"><div class="section-heading"><div><p class="eyebrow">STUDENT</p><h2>My bookings</h2></div>
+    body = rem + f'''<section class="section"><div class="section-heading"><div><p class="eyebrow">STUDENT</p><h2>My bookings</h2></div>
 <a class="primary-link small" href="/#booking">+ New booking</a></div><div class="table-wrap"><table>
 <thead><tr><th>ID</th><th>Equipment</th><th>Pick-up</th><th>Return</th><th>Status</th><th></th></tr></thead>
 <tbody>{"".join(trs) or '<tr><td colspan="6">You have no bookings yet. <a href="/#booking">Book equipment</a></td></tr>'}</tbody></table></div></section>'''
@@ -182,7 +254,7 @@ def my_page(user, message="", error=False):
 
 
 # ---- SVG charts for the admin dashboard (C5) -------------------------------------
-def svg_bar(rows, label_key, value_key, title, unit, color="#2563eb", fmt="{:g}"):
+def svg_bar(rows, label_key, value_key, title, unit, color="#1385e5", fmt="{:g}"):
     w, row_h, left = 560, 30, 130
     vmax = max([r[value_key] for r in rows] + [1])
     h = row_h * len(rows) + 40
@@ -208,9 +280,9 @@ def svg_line(rows, title):
     p = [f'<svg class="chart" viewBox="0 0 {w} {h}" role="img" aria-label="{esc(title)}">']
     for v in range(0, vmax + 1, 5):
         p.append(f'<line x1="{l}" x2="{w - r}" y1="{Y(v):.1f}" y2="{Y(v):.1f}" class="grid"/><text x="{l - 6}" y="{Y(v) + 4:.1f}" text-anchor="end" class="axis">{v}</text>')
-    p.append(f'<polyline points="{pts}" fill="none" stroke="#2563eb" stroke-width="2.5"/>')
+    p.append(f'<polyline points="{pts}" fill="none" stroke="#1a3a5c" stroke-width="2.5"/>')
     for i, x in enumerate(rows):
-        p.append(f'<circle cx="{X(i):.1f}" cy="{Y(x["bookings"]):.1f}" r="3.5" fill="#2563eb"/>'
+        p.append(f'<circle cx="{X(i):.1f}" cy="{Y(x["bookings"]):.1f}" r="4" fill="#1385e5"/>'
                  f'<text x="{X(i):.1f}" y="{h - b + 16}" text-anchor="middle" class="axis">{x["week"]}</text>')
     p.append(f'<text x="{(w + l) / 2}" y="{h - 8}" text-anchor="middle" class="axis">Semester week (week 1 starts 1 Sep 2026)</text>'
              f'<text x="12" y="{t + (h - b) / 2}" transform="rotate(-90 12 {t + (h - b) / 2})" text-anchor="middle" class="axis">Bookings</text></svg>')
@@ -258,6 +330,11 @@ def admin_page(user, message="", error=False):
              JOIN User u USING(user_id) WHERE b.status='Confirmed' ORDER BY b.return_date""").fetchall()
         eq = equipment_state(c)
         logs = c.execute("SELECT * FROM AuditLog ORDER BY log_id DESC LIMIT 8").fetchall()
+        tm = (dt.date.fromisoformat(t) + dt.timedelta(days=1)).isoformat()
+        due = c.execute("""SELECT b.booking_id, b.return_date, e.name, u.full_name FROM Booking b JOIN Equipment e USING(equipment_id)
+             JOIN User u USING(user_id) WHERE b.status='Confirmed' AND b.return_date IN (?,?) ORDER BY b.return_date""", (t, tm)).fetchall()
+        blocks = c.execute("""SELECT k.*, e.name FROM Block k JOIN Equipment e USING(equipment_id)
+             WHERE k.end_date>=? ORDER BY k.start_date""", (t,)).fetchall()
         iot = iot_status(c)
     kpis = [("Bookings in database", k["total"]), ("Active today", k["active"]), ("Overdue", k["overdue"]),
             ("Late-return rate", f"{late_all}%"), ("Registered students", k["students"])]
@@ -271,20 +348,31 @@ def admin_page(user, message="", error=False):
                   f'<button class="link">{"Mark returned" if st != "Upcoming" else "Cancel"}</button></form></td></tr>')
     eqr = "".join(f'<tr><td>{x["equipment_id"]}</td><td>{esc(x["name"])}</td><td>{esc(x["category"])}</td><td>{status_badge(x["state"])}</td><td>'
                   f'<form class="inline" method="post" action="/admin/maintenance"><input type="hidden" name="equipment_id" value="{x["equipment_id"]}">'
-                  f'<button class="link">{"End maintenance" if x["status"] == "Maintenance" else "Send to maintenance"}</button></form></td></tr>' for x in eq)
+                  f'<button class="link">{"End maintenance" if x["status"] == "Maintenance" else "Send to maintenance"}</button></form> '
+                  f'<a class="link-btn" href="/admin/equipment?id={x["equipment_id"]}">Edit</a></td></tr>' for x in eq)
     iot_rows = "".join(f'<tr data-eq="{d["equipment_id"]}"><td>{esc(d["name"])}</td><td><code>{esc(d["device_id"])}</code></td>'
                        f'<td>{d["power_w"]} W</td><td>{"yes" if d["in_cabinet"] else "no"}</td><td>{esc(d["recorded_at"])}</td>'
                        f'<td><span class="pill {d["level"]}">{esc(d["alert"])}</span></td></tr>' for d in iot)
+    rem_items = [("overdue", f"<b>{k['overdue']}</b> overdue loan{'s' if k['overdue'] != 1 else ''} — see Open bookings below.")] if k["overdue"] else []
+    rem_items += [("due", f"#{d['booking_id']} <b>{esc(d['name'])}</b> — {esc(d['full_name'])} returns it "
+                          f"{'today' if d['return_date'] == t else 'tomorrow'} ({d['return_date']}).") for d in due]
+    cats = sorted({x["category"] for x in eq})
+    eq_opts = "".join(f'<option value="{x["equipment_id"]}">{esc(x["name"])}</option>' for x in eq)
+    block_rows = "".join(f'<tr><td>{esc(b["name"])}</td><td>{b["start_date"]}</td><td>{b["end_date"]}</td><td>{esc(b["reason"])}</td><td>'
+                         f'<form class="inline" method="post" action="/admin/unblock"><input type="hidden" name="block_id" value="{b["block_id"]}">'
+                         f'<button class="link danger">Remove</button></form></td></tr>' for b in blocks)
     log_rows = "".join(f'<tr><td>{esc(l["timestamp"])}</td><td>{esc(l["action"])}</td><td>{esc(l["entity"])} #{l["entity_id"]}</td><td>{l["user_id"]}</td></tr>' for l in logs)
     body = f'''<section class="section"><div class="section-heading"><div><p class="eyebrow">ADMIN</p><h2>Lab dashboard</h2></div>
 <span class="count">Live from SQLite · {t}</span></div><div class="kpis">{kpi_html}</div></section>
+{reminders_html(rem_items, "Return reminders")}
 
 <section class="section" id="stats"><div class="section-heading"><div><p class="eyebrow">DATA ANALYSIS</p><h2>Booking statistics</h2></div>
-<span class="count">Source: LabBook DB, generated demo data</span></div>
+<div class="btn-row"><a class="secondary" href="/admin/export/stats.csv" download>⬇ Statistics CSV</a>
+<a class="secondary" href="/admin/export/bookings.csv" download>⬇ All bookings CSV</a></div></div>
 <div class="charts">
 <figure class="card"><figcaption>Bookings by equipment category (Sep–Nov 2026)</figcaption>{svg_bar(q1, "category", "bookings", "Bookings by category", "Number of bookings (excl. cancelled)")}</figure>
 <figure class="card"><figcaption>Bookings per semester week</figcaption>{svg_line(q2, "Bookings per week")}</figure>
-<figure class="card"><figcaption>Late returns by category</figcaption>{svg_bar(q3, "category", "late_pct", "Late return rate", "Late returns, % of returned loans", "#d97706", "{:g}%")}</figure>
+<figure class="card"><figcaption>Late returns by category</figcaption>{svg_bar(q3, "category", "late_pct", "Late return rate", "Late returns, % of returned loans", "#1a3a5c", "{:g}%")}</figure>
 </div></section>
 
 <section class="section" id="iot"><div class="section-heading"><div><p class="eyebrow">SMART TAGS · IOT SIMULATION</p><h2>Equipment sensors</h2></div>
@@ -296,8 +384,20 @@ def admin_page(user, message="", error=False):
 <div class="table-wrap"><table><thead><tr><th>ID</th><th>Student</th><th>Equipment</th><th>Pick-up</th><th>Return</th><th>State</th><th></th></tr></thead>
 <tbody>{"".join(ob) or '<tr><td colspan="7">No open bookings</td></tr>'}</tbody></table></div></section>
 
-<section class="section"><div class="section-heading"><div><p class="eyebrow">INVENTORY</p><h2>Equipment</h2></div></div>
-<div class="table-wrap"><table><thead><tr><th>ID</th><th>Name</th><th>Category</th><th>Now</th><th></th></tr></thead><tbody>{eqr}</tbody></table></div></section>
+<section class="section" id="inventory"><div class="section-heading"><div><p class="eyebrow">INVENTORY</p><h2>Equipment</h2></div></div>
+<div class="table-wrap"><table><thead><tr><th>ID</th><th>Name</th><th>Category</th><th>Now</th><th></th></tr></thead><tbody>{eqr}</tbody></table></div>
+<details class="panel"><summary>+ Add new equipment</summary>{equipment_form(None, cats)}</details></section>
+
+<section class="section" id="blocks"><div class="section-heading"><div><p class="eyebrow">LAB RESERVATIONS</p><h2>Blocked dates</h2></div>
+<span class="count">Students cannot book an item on these dates</span></div>
+<div class="table-wrap"><table><thead><tr><th>Equipment</th><th>From</th><th>To</th><th>Reason</th><th></th></tr></thead>
+<tbody>{block_rows or '<tr><td colspan="5">No blocked dates.</td></tr>'}</tbody></table></div>
+<details class="panel"><summary>+ Block dates for an item</summary>
+<form method="post" action="/admin/block" class="form-grid"><div><label for="blk-eq">Equipment</label><select id="blk-eq" name="equipment_id" required>{eq_opts}</select></div>
+<div><label for="blk-reason">Reason (shown to students)</label><input id="blk-reason" name="reason" maxlength="80" placeholder="e.g. Physics lab session"></div>
+<div><label for="blk-from">From</label><input id="blk-from" name="start_date" type="date" min="{t}" required></div>
+<div><label for="blk-to">To</label><input id="blk-to" name="end_date" type="date" min="{t}" required></div>
+<div class="span2"><button type="submit">Block these dates</button></div></form></details></section>
 
 <section class="section"><div class="section-heading"><div><p class="eyebrow">SECURITY</p><h2>Audit log (latest 8)</h2></div></div>
 <div class="table-wrap"><table><thead><tr><th>Time (UTC)</th><th>Action</th><th>Entity</th><th>User ID</th></tr></thead><tbody>{log_rows}</tbody></table></div></section>
@@ -305,9 +405,55 @@ def admin_page(user, message="", error=False):
     return layout("Admin dashboard", body, user, message, error)
 
 
+def equipment_form(e, cats):
+    """R6: create (e is None) or edit equipment."""
+    v = (lambda k: esc(str(e[k] or ""))) if e else (lambda k: "")
+    hid = f'<input type="hidden" name="equipment_id" value="{e["equipment_id"]}">' if e else ""
+    cat_list = "".join(f'<option value="{esc(cx)}">' for cx in cats)
+    return f'''<form method="post" action="/admin/equipment" class="form-grid">{hid}
+<div><label for="eq-name{v("equipment_id")}">Name</label><input id="eq-name{v("equipment_id")}" name="name" value="{v("name")}" minlength="2" maxlength="80" required></div>
+<div><label for="eq-cat{v("equipment_id")}">Category</label><input id="eq-cat{v("equipment_id")}" name="category" value="{v("category")}" list="cat-list" minlength="2" maxlength="40" required>
+<datalist id="cat-list">{cat_list}</datalist></div>
+<div class="span2"><label for="eq-desc{v("equipment_id")}">Description</label><input id="eq-desc{v("equipment_id")}" name="description" value="{v("description")}" maxlength="200"></div>
+<div><label for="eq-loc{v("equipment_id")}">Location</label><input id="eq-loc{v("equipment_id")}" name="location" value="{v("location") or "Lab C1.2"}" maxlength="40"></div>
+<div class="align-end"><button type="submit">{"Save changes" if e else "Add equipment"}</button></div></form>'''
+
+
+def equipment_edit_page(user, eid):
+    with db() as c:
+        e = c.execute("SELECT * FROM Equipment WHERE equipment_id=?", (eid,)).fetchone()
+        cats = sorted({r[0] for r in c.execute("SELECT DISTINCT category FROM Equipment")})
+    if not e:
+        return None
+    body = f'''<section class="section"><div class="section-heading"><div><p class="eyebrow">INVENTORY · ID {e["equipment_id"]}</p>
+<h2>Edit {esc(e["name"])}</h2></div><a class="secondary" href="/admin#inventory">← Back to dashboard</a></div>
+{equipment_form(e, cats)}</section>'''
+    return layout("Edit equipment", body, user)
+
+
 def error_page(user, code, text):
     return layout(f"{code}", f'<section class="auth"><p class="eyebrow">ERROR {code}</p><h1>{esc(text)}</h1>'
                   f'<p><a class="primary-link small" href="/">Back to catalog</a></p></section>', user)
+
+
+def availability(eid):
+    """R3: busy date ranges for one item (no student names) for the booking calendar."""
+    t = today()
+    with db() as c:
+        e = c.execute("SELECT equipment_id, name, status FROM Equipment WHERE equipment_id=?", (eid,)).fetchone()
+        if not e:
+            return {"error": "unknown equipment"}
+        busy = []
+        for b in c.execute("""SELECT booking_date, return_date FROM Booking WHERE equipment_id=? AND status='Confirmed'
+                              ORDER BY booking_date""", (eid,)):
+            if b["return_date"] < t:   # overdue: blocks every date from pick-up until it is returned
+                busy.append({"start": b["booking_date"], "end": "9999-12-31", "type": "overdue", "label": "Not returned yet"})
+            else:
+                busy.append({"start": b["booking_date"], "end": b["return_date"], "type": "booked", "label": "Booked"})
+        for k in c.execute("SELECT start_date, end_date, reason FROM Block WHERE equipment_id=? AND end_date>=?", (eid, t)):
+            busy.append({"start": k["start_date"], "end": k["end_date"], "type": "blocked", "label": k["reason"] or "Reserved by the lab"})
+    return {"equipment_id": e["equipment_id"], "name": e["name"], "maintenance": e["status"] == "Maintenance",
+            "today": t, "max_days": MAX_DAYS, "busy": busy}
 
 
 # ---- HTTP handler -----------------------------------------------------------------
@@ -407,6 +553,25 @@ class Handler(BaseHTTPRequestHandler):
             if user["role"] != "admin":
                 return self.forbidden(user)
             return self.send(admin_page(user))
+        if path in ("/admin/equipment", "/admin/export/bookings.csv", "/admin/export/stats.csv"):
+            if not user:
+                return self.redirect("/login")
+            if user["role"] != "admin":
+                return self.forbidden(user)
+            if path == "/admin/equipment":
+                q = parse_qs(urlsplit(self.path).query)
+                page = equipment_edit_page(user, (q.get("id") or ["0"])[0])
+                return self.send(page) if page else self.send(error_page(user, 404, "Equipment not found"), 404)
+            return self.export_csv(user, path)
+        if path == "/api/availability":
+            if not user:
+                return self.send('{"error":"login required"}', 401, "application/json")
+            q = parse_qs(urlsplit(self.path).query)
+            try:
+                eid = int((q.get("equipment_id") or ["0"])[0])
+            except ValueError:
+                return self.send('{"error":"bad equipment_id"}', 400, "application/json")
+            return self.send(json.dumps(availability(eid)), ctype="application/json", headers=[("Cache-Control", "no-store")])
         if path == "/admin/iot.json":
             if not user or user["role"] != "admin":
                 return self.send('{"error":"forbidden"}', 403, "application/json")
@@ -448,7 +613,9 @@ class Handler(BaseHTTPRequestHandler):
         if not (2 <= len(name) <= 80):
             problem = "Please enter your full name (2–80 characters)."
         elif not EMAIL_RE.match(email):
-            problem = "Please enter a valid email address, e.g. name@university.kz."
+            problem = f"Please enter a valid email address, e.g. name@{UNI_DOMAINS[0]}."
+        elif not email.endswith(tuple("@" + d for d in UNI_DOMAINS)):
+            problem = f"Please use your university e-mail (…@{UNI_DOMAINS[0]}). Other addresses cannot register."
         elif len(pw) < 8 or not re.search(r"[A-Za-z]", pw) or not re.search(r"\d", pw):
             problem = "Password must be at least 8 characters and contain a letter and a digit."
         if problem:
@@ -506,6 +673,14 @@ class Handler(BaseHTTPRequestHandler):
                     problem = (f"{eq['name']} is already booked from {clash['booking_date']} to {clash['return_date']}. "
                                "Choose other dates or another item.")
             if not problem:
+                blk = c.execute("""SELECT start_date, end_date, reason FROM Block WHERE equipment_id=?
+                                     AND start_date<=? AND end_date>=? ORDER BY start_date LIMIT 1""",
+                                (eid, de.isoformat(), ds.isoformat())).fetchone()
+                if blk:
+                    why = f" ({blk['reason']})" if blk["reason"] else ""
+                    problem = (f"{eq['name']} is reserved by the lab from {blk['start_date']} to {blk['end_date']}{why}. "
+                               "Choose other dates or another item.")
+            if not problem:
                 cur = c.execute("INSERT INTO Booking(user_id,equipment_id,booking_date,return_date,status) VALUES(?,?,?,?,'Confirmed')",
                                 (user["user_id"], eid, ds.isoformat(), de.isoformat()))
                 audit(c, "CREATE", "Booking", cur.lastrowid, user["user_id"])
@@ -545,9 +720,89 @@ class Handler(BaseHTTPRequestHandler):
                     c.execute("UPDATE Equipment SET status=? WHERE equipment_id=?", (new, e["equipment_id"]))
                     audit(c, "UPDATE", "Equipment", e["equipment_id"], user["user_id"])
                     msg, err = f"{e['name']}: status set to {new}.", False
+            elif path == "/admin/equipment":
+                msg, err = self.save_equipment(c, user, f)
+            elif path == "/admin/block":
+                msg, err = self.add_block(c, user, f)
+            elif path == "/admin/unblock":
+                n = c.execute("DELETE FROM Block WHERE block_id=?", (f.get("block_id"),)).rowcount
+                if n:
+                    audit(c, "DELETE", "Block", int(f.get("block_id")), user["user_id"])
+                msg, err = ("Blocked dates removed.", False) if n else ("Block not found.", True)
             else:
                 return self.send(error_page(user, 404, "Not found"), 404)
         self.send(admin_page(user, msg, err), 400 if err else 200)
+
+    def save_equipment(self, c, user, f):
+        name, cat = f.get("name", ""), f.get("category", "")
+        desc, loc = f.get("description", ""), f.get("location", "") or "Lab C1.2"
+        if not (2 <= len(name) <= 80) or not (2 <= len(cat) <= 40) or len(desc) > 200 or len(loc) > 40:
+            return "Check the fields: name 2–80, category 2–40, description up to 200, location up to 40 characters.", True
+        eid = f.get("equipment_id")
+        if eid:
+            n = c.execute("UPDATE Equipment SET name=?, category=?, description=?, location=? WHERE equipment_id=?",
+                          (name, cat, desc, loc, eid)).rowcount
+            if not n:
+                return "Equipment not found.", True
+            audit(c, "UPDATE", "Equipment", int(eid), user["user_id"])
+            return f"{name}: changes saved.", False
+        cur = c.execute("INSERT INTO Equipment(name,category,description,location) VALUES(?,?,?,?)", (name, cat, desc, loc))
+        audit(c, "CREATE", "Equipment", cur.lastrowid, user["user_id"])
+        return f"{name} added to the catalog (ID {cur.lastrowid}).", False
+
+    def add_block(self, c, user, f):
+        try:
+            eid = int(f.get("equipment_id", "0"))
+            ds = dt.date.fromisoformat(f.get("start_date", ""))
+            de = dt.date.fromisoformat(f.get("end_date", ""))
+        except ValueError:
+            return "Choose the item and both dates.", True
+        reason = f.get("reason", "")[:80]
+        eq = c.execute("SELECT name FROM Equipment WHERE equipment_id=?", (eid,)).fetchone()
+        if not eq:
+            return "Equipment not found.", True
+        if de < ds:
+            return "The end date cannot be earlier than the start date.", True
+        if de < dt.date.today():
+            return "These dates are already in the past.", True
+        if (de - ds).days > 90:
+            return "You can block at most 90 days at once.", True
+        cur = c.execute("INSERT INTO Block(equipment_id,start_date,end_date,reason,created_by) VALUES(?,?,?,?,?)",
+                        (eid, ds.isoformat(), de.isoformat(), reason, user["user_id"]))
+        audit(c, "CREATE", "Block", cur.lastrowid, user["user_id"])
+        n = c.execute("""SELECT COUNT(*) FROM Booking WHERE equipment_id=? AND status='Confirmed'
+                         AND booking_date<=? AND return_date>=?""", (eid, de.isoformat(), ds.isoformat())).fetchone()[0]
+        warn = f" Note: {n} existing booking{'s' if n != 1 else ''} overlap these dates — contact the student{'s' if n != 1 else ''}." if n else ""
+        return f"{eq['name']} is blocked from {ds} to {de}.{warn}", False
+
+    def export_csv(self, user, path):
+        """R10: CSV export for Excel (UTF-8 with BOM; cells starting with = + - @ are neutralised)."""
+        safe = lambda v: ("'" + v) if isinstance(v, str) and v[:1] in ("=", "+", "-", "@") else v
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        with db() as c:
+            if path.endswith("bookings.csv"):
+                w.writerow(["booking_id", "equipment", "category", "student", "pick_up", "return_due", "status", "returned_at", "days", "returned_late"])
+                for r in c.execute("""SELECT b.booking_id, e.name, e.category, u.full_name, b.booking_date, b.return_date, b.status, b.returned_at,
+                        CAST(julianday(b.return_date) - julianday(b.booking_date) + 1 AS INTEGER) AS days,
+                        CASE WHEN b.status='Returned' AND b.returned_at > b.return_date THEN 'yes'
+                             WHEN b.status='Returned' THEN 'no' ELSE '' END
+                        FROM Booking b JOIN Equipment e USING(equipment_id) JOIN User u USING(user_id) ORDER BY b.booking_id"""):
+                    w.writerow([safe(x) if x is not None else "" for x in r])
+                name = "bookings"
+            else:
+                q1 = {r["category"]: r["bookings"] for r in c.execute(Q1_BY_CATEGORY)}
+                q3 = {r["category"]: r for r in c.execute(Q3_LATE_BY_CATEGORY)}
+                w.writerow(["category", "bookings_excl_cancelled", "returned_loans", "avg_days_kept", "late_return_pct"])
+                for cat in sorted(set(q1) | set(q3), key=lambda k: -q1.get(k, 0)):
+                    r3 = q3.get(cat)
+                    w.writerow([safe(cat), q1.get(cat, 0), r3["returned_loans"] if r3 else 0,
+                                r3["avg_days_kept"] if r3 else "", r3["late_pct"] if r3 else ""])
+                name = "statistics"
+            audit(c, "EXPORT", "CSV", None, user["user_id"])
+        data = ("\ufeff" + buf.getvalue()).encode("utf-8")
+        self.send(data, ctype="text/csv; charset=utf-8",
+                  headers=[("Content-Disposition", f'attachment; filename="labbook_{name}_{today()}.csv"'), ("Cache-Control", "no-store")])
 
     def sensor(self):
         """IoT endpoint: smart tag sends JSON {equipment_id, device_id, power_w, in_cabinet} with X-Device-Key."""
@@ -573,6 +828,8 @@ def ensure_db():
     if not DB.exists():
         import subprocess, sys
         subprocess.run([sys.executable, str(BASE / "scripts" / "seed_db.py")], check=True)
+    with db() as c:          # add tables introduced after Stage 2 to an existing database
+        c.executescript(BLOCK_SCHEMA)
 
 
 if __name__ == "__main__":
