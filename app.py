@@ -1,4 +1,4 @@
-"""LabBook — Laboratory Equipment Booking Service (Project Stage 2 prototype).
+"""LabBook — Laboratory Equipment Booking Service (ICT Final Project, final version).
 
 Python standard library + SQLite. Roles: student, admin.
 Run locally:  python app.py   ->  http://127.0.0.1:8000
@@ -124,7 +124,7 @@ def layout(title, body, user=None, message="", error=False):
 <div><strong>LabBook</strong><span>Laboratory Equipment Booking Service</span></div></a>
 <nav class="nav" aria-label="Main">{"".join(nav)}</nav></header>
 <main>{notice}{body}</main>
-<footer><img src="/static/images/logo.svg" alt="" width="30" height="30"><span>LabBook · Python + SQLite · Project Stage 2</span>
+<footer><img src="/static/images/logo.svg" alt="" width="30" height="30"><span>LabBook · Python + SQLite · ICT Final Project 2026</span>
 <span>Demo data is generated · no real personal data</span></footer>
 <script src="/static/app.js" defer></script></body></html>'''
 

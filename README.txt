@@ -1,4 +1,4 @@
-LABBOOK — LABORATORY EQUIPMENT BOOKING SERVICE (ICT Project Stage 2)
+LABBOOK — LABORATORY EQUIPMENT BOOKING SERVICE (ICT Final Project — final version, 17 Nov 2026)
 Author: Dulat Nurlybek · SE-2625 (individual project)
 Live: https://lab-equipment-booking-vzta.onrender.com/   (Render free tier: first open after idle takes ~50 s)
 Code: https://github.com/Dulat222/lab-equipment-booking
@@ -16,9 +16,24 @@ DEMO ACCOUNTS (generated data — not real people)
   Student:  aruzhan.s@labbook.test  / Student#2026   (all 36 demo students use Student#2026)
   Or register a new student account on /register.
 
-MAIN SCENARIOS
-  Student: Register/Log in -> choose equipment and dates -> Book -> "My bookings" -> cancel an upcoming booking.
-  Admin:   Log in -> dashboard (KPIs, 3 charts, IoT sensors) -> "Mark returned" / "Send to maintenance".
+TEST ACCOUNTS FOR EVERY ROLE
+  Role       Login                     Password       Notes
+  Admin      admin@labbook.test        Admin#2026     dashboard, inventory, blocked dates, CSV, sensors
+  Student    aruzhan.s@labbook.test    Student#2026   all 36 demo students use Student#2026
+  Visitor    (no login)                -              catalogue only
+  New student: /register with any ...@astanait.edu.kz address (other domains are rejected, R1).
+
+MAIN SCENARIOS (final version)
+  Student: Register/Log in -> search catalogue -> choose item -> availability calendar -> Book -> reminders
+           -> "My bookings" -> cancel an upcoming booking. Typing /admin as a student gives HTTP 403.
+  Admin:   Log in -> dashboard (KPIs, return reminders, 3 charts, IoT sensors) -> "Mark returned" /
+           "Send to maintenance" -> add/edit equipment -> block dates -> download CSV.
+
+TESTS
+  Start the server (py app.py), then in a second terminal:
+     py tests/test_features.py http://127.0.0.1:8000          -> 38 checks, expect "ALL PASSED"
+     py tests/r4_concurrency_test.py http://127.0.0.1:8000 5  -> expect "R4 PASSED"
+  Afterwards reset the demo data: py scripts/seed_db.py
 
 SECURITY (from Assignment 3)
   - Passwords stored as PBKDF2-HMAC-SHA256 hashes (600 000 iterations as recommended by OWASP, random 16-byte salt) — security.py
